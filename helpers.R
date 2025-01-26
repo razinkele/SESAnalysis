@@ -224,3 +224,41 @@ analyze_leverage_points <- function(nodes, edges, cycles) {
   
   return(node_stats)
 }
+# Helper function to get node colors based on leverage scores
+get_leverage_node_colors <- function(nodes, leverage_points, threshold) {
+  nodes$value <- 1
+  nodes$color <- sapply(1:nrow(nodes), function(i) {
+    node_id <- nodes$id[i]
+    leverage_score <- leverage_points$leverage_score[leverage_points$node_id == node_id]
+    
+    if (leverage_score >= threshold) {
+      "rgba(255, 165, 0, 1)"  # Orange for high leverage nodes
+    } else {
+      "rgba(151, 194, 252, 0.3)"  # Dimmed light blue for other nodes
+    }
+  })
+  return(nodes)
+}
+
+# Helper function to get edge colors based on leverage points
+get_leverage_edge_colors <- function(edges, nodes_above_threshold) {
+  edges$value <- 1
+  edges$color <- sapply(1:nrow(edges), function(i) {
+    if (edges$from[i] %in% nodes_above_threshold && 
+        edges$to[i] %in% nodes_above_threshold) {
+      if (edges$type[i] == "positive") {
+        "rgba(43, 124, 233, 1)"  # Full opacity blue
+      } else {
+        "rgba(233, 43, 43, 1)"   # Full opacity red
+      }
+    } else {
+      if (edges$type[i] == "positive") {
+        "rgba(43, 124, 233, 0.15)"  # Dimmed blue
+      } else {
+        "rgba(233, 43, 43, 0.15)"   # Dimmed red
+      }
+    }
+  })
+  edges$dashes <- edges$type == "negative"
+  return(edges)
+}

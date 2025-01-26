@@ -24,16 +24,30 @@ ui <- page_sidebar(
     actionButton("generate", "Generate New Network", 
                  class = "btn-primary"),
     hr(),
-    uiOutput("loop_selector")  # Dynamic loop selection UI
+    uiOutput("loop_selector"),  # Dynamic loop selection UI
+    hr(),
+    h4("Leverage Points"),
+    uiOutput("leverage_selector"),
+    sliderInput("leverage_threshold", 
+                "Highlight nodes with leverage score above:",
+                min = 0, max = 1.8, value = 0.5, step = 0.1)
   ),
   
   # Main panel with network visualization and loop info
   tabsetPanel(
     tabPanel("Network",
              card(
-               card_header("Network Visualization"),
+               card_header(textOutput("network_card_header")),
                card_body(
                  visNetworkOutput("network_plot", height = "600px")
+               )
+             )
+    ),
+    tabPanel("Leverage Points",
+             card(
+               card_header("Leverage Point Analysis"),
+               card_body(
+                 uiOutput("leverage_info")
                )
              )
     ),
@@ -49,10 +63,90 @@ ui <- page_sidebar(
 )
 
 server <- function(input, output, session) {
-  
+  network_header <- reactiveVal("Network Visualization")
   # Reactive value to store current graph
   graph_data <- reactiveVal()
+  # Display leverage point analysis
+  output$leverage_info <- renderUI({
+    req(graph_data())
+    
+    data <- graph_data()
+    
+    if (length(data$cycles) == 0) {
+      return(div(
+        style = "color: #666;",
+        "No loops detected in the network. Leverage point analysis requires loops."
+      ))
+    }
+    
+    # Perform leverage point analysis
+    leverage_points <- analyze_leverage_points(data$nodes, data$edges, data$cycles)
+    
+    # Create the output
+    tagList(
+      h4("Network Leverage Point Analysis"),
+      p("Nodes are ranked based on their involvement in feedback loops, with higher scores indicating greater potential leverage."),
+      div(
+        style = "margin-bottom: 20px;",
+        tags$table(
+          class = "table table-striped",
+          tags$thead(
+            tags$tr(
+              tags$th("Node"),
+              tags$th("Total Loops"),
+              tags$th("Reinforcing"),
+              tags$th("Balancing"),
+              tags$th("Leverage Score")
+            )
+          ),
+          tags$tbody(
+            lapply(1:nrow(leverage_points), function(i) {
+              tags$tr(
+                tags$td(leverage_points$node_label[i]),
+                tags$td(leverage_points$total_loops[i]),
+                tags$td(leverage_points$reinforcing_loops[i]),
+                tags$td(leverage_points$balancing_loops[i]),
+                tags$td(sprintf("%.2f", leverage_points$leverage_score[i]))
+              )
+            })
+          )
+        )
+      ),
+      hr(),
+      div(
+        style = "margin-top: 20px;",
+        h5("Interpretation Guide:"),
+        tags$ul(
+          tags$li("Nodes with higher leverage scores are more central to the network's feedback structure."),
+          tags$li("The leverage score considers both the number and types of loops a node participates in."),
+          tags$li("Reinforcing loops are weighted slightly higher (1.2x) than balancing loops in the score calculation."),
+          tags$li("Nodes participating in many loops but with low scores might indicate redundant pathways.")
+        )
+      )
+    )
+  })
   
+  # Add this new output renderer
+  output$network_card_header <- renderText({
+    network_header()
+  })
+  
+  # Add this observer to update the header when a loop is selected
+  observe({
+    req(graph_data())
+    
+    selected <- try(as.numeric(input$selected_loop), silent = TRUE)
+    if (!inherits(selected, "try-error") && !is.na(selected) && selected != 0) {
+      if (selected <= length(graph_data()$cycles)) {
+        # Get the loop analysis for the selected loop
+        cycle <- graph_data()$cycles[[selected]]
+        analysis <- analyze_loop(cycle, graph_data()$edges)
+        network_header(sprintf("%s Loop %d", analysis$type, selected))
+      }
+    } else {
+      network_header("Network Visualization")
+    }
+  })
   observeEvent(input$generate, {
     # Create random graph using igraph
     g <- sample_gnm(n = input$num_nodes, 
@@ -113,7 +207,26 @@ server <- function(input, output, session) {
   })
   
   
-  # Modified network_plot render to include edge styling:
+  # Leverage point selector UI
+  output$leverage_selector <- renderUI({
+    req(graph_data())
+    data <- graph_data()
+    
+    if (length(data$cycles) == 0) {
+      return(NULL)
+    }
+    
+    leverage_points <- analyze_leverage_points(data$nodes, data$edges, data$cycles)
+    
+    radioButtons("leverage_view", "View Mode:",
+                 choices = c(
+                   "Normal View" = "normal",
+                   "Highlight High Leverage Nodes" = "highlight"
+                 ),
+                 selected = "normal")
+  })
+  
+  # Modify the network_plot renderer to include leverage point highlighting
   output$network_plot <- renderVisNetwork({
     req(graph_data())
     
@@ -124,24 +237,36 @@ server <- function(input, output, session) {
     edges$width <- 1
     nodes <- data$nodes
     
-    # Highlight selected loop by dimming other edges and nodes
-    selected <- try(as.numeric(input$selected_loop), silent = TRUE)
-    if (!inherits(selected, "try-error") && !is.na(selected) && selected != 0) {
-      if (selected <= length(data$cycles)) {
-        cycle <- data$cycles[[selected]]
-        
-        # Get cycle edge matrix
-        cycle_edges <- create_cycle_edge_matrix(cycle)
-        
-        # Update colors based on cycle membership
-        edges <- get_edge_colors(edges, cycle_edges)
-        nodes <- get_node_colors(nodes, cycle)
-      }
+    # Handle different view modes
+    if (!is.null(input$leverage_view) && input$leverage_view == "highlight" && length(data$cycles) > 0) {
+      # Leverage point highlighting mode
+      leverage_points <- analyze_leverage_points(nodes, edges, data$cycles)
+      threshold <- input$leverage_threshold
+      
+      # Get nodes above threshold
+      nodes_above_threshold <- leverage_points$node_id[leverage_points$leverage_score >= threshold]
+      
+      # Update colors
+      nodes <- get_leverage_node_colors(nodes, leverage_points, threshold)
+      edges <- get_leverage_edge_colors(edges, nodes_above_threshold)
+      
     } else {
-      # Set default colors when no loop is selected
+      # Normal mode (existing loop highlighting or default view)
       colored_data <- set_default_colors(nodes, edges)
       nodes <- colored_data$nodes
       edges <- colored_data$edges
+      
+      if (length(data$cycles) > 0) {
+        selected <- try(as.numeric(input$selected_loop), silent = TRUE)
+        if (!inherits(selected, "try-error") && !is.na(selected) && selected != 0) {
+          if (selected <= length(data$cycles)) {
+            cycle <- data$cycles[[selected]]
+            cycle_edges <- create_cycle_edge_matrix(cycle)
+            edges <- get_edge_colors(edges, cycle_edges)
+            nodes <- get_node_colors(nodes, cycle)
+          }
+        }
+      }
     }
     
     visNetwork(nodes, edges) %>%
@@ -158,7 +283,10 @@ server <- function(input, output, session) {
       ) %>%
       visEdges(
         arrows = "to",
-        smooth = FALSE  # Makes dashed lines more visible
+        smooth = list(
+          type = "curvedCW",
+          roundness = 0.2
+        )
       ) %>%
       visLayout(randomSeed = 123)
   })
