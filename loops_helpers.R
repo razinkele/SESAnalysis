@@ -9,7 +9,13 @@ create_cycle_edge_matrix <- function(cycle) {
 }
 
 # Helper function for edge colors
+# Helper function for edge colors
 get_edge_colors <- function(edges, cycle_edges) {
+  # Handle empty edges case
+  if (nrow(edges) == 0) {
+    return(edges)
+  }
+  
   edges$value <- 1  # For controlling opacity
   edges$color <- sapply(1:nrow(edges), function(i) {
     edge_in_cycle <- any(apply(cycle_edges, 1, function(ce) {
@@ -32,7 +38,9 @@ get_edge_colors <- function(edges, cycle_edges) {
   })
   
   # Add dashed style for negative edges
-  edges$dashes <- edges$type == "negative"
+  if (nrow(edges) > 0) {
+    edges$dashes <- edges$type == "negative"
+  }
   
   return(edges)
 }
@@ -52,6 +60,11 @@ get_node_colors <- function(nodes, cycle) {
 
 # Helper function for default colors
 set_default_colors <- function(nodes, edges) {
+  # Handle empty edges case
+  if (nrow(edges) == 0) {
+    return(list(nodes = nodes, edges = edges))
+  }
+  
   edges$color <- sapply(1:nrow(edges), function(i) {
     if(edges$type[i] == "positive") {
       "rgba(43, 124, 233, 1)"  # Blue for positive
@@ -59,7 +72,12 @@ set_default_colors <- function(nodes, edges) {
       "rgba(233, 43, 43, 1)"   # Red for negative
     }
   })
-  edges$dashes <- edges$type == "negative"
+  
+  # Only set dashes if there are edges
+  if (nrow(edges) > 0) {
+    edges$dashes <- edges$type == "negative"
+  }
+  
   nodes$color <- "rgba(151, 194, 252, 1)"  # Full opacity light blue
   return(list(nodes = nodes, edges = edges))
 }
@@ -160,4 +178,49 @@ analyze_loop <- function(cycle, edges) {
     negative_edges = neg_count,
     total_edges = length(cycle_edges)
   )
+}
+# Helper function for leverage point analysis
+analyze_leverage_points <- function(nodes, edges, cycles) {
+  if (length(cycles) == 0) {
+    return(NULL)
+  }
+  
+  # Initialize node statistics
+  node_stats <- data.frame(
+    node_id = nodes$id,
+    node_label = nodes$label,
+    total_loops = 0,
+    reinforcing_loops = 0,
+    balancing_loops = 0,
+    stringsAsFactors = FALSE
+  )
+  
+  # Analyze each cycle
+  for (cycle in cycles) {
+    # Get cycle type
+    analysis <- analyze_loop(cycle, edges)
+    
+    # Update statistics for each node in the cycle
+    for (node_id in cycle) {
+      idx <- which(node_stats$node_id == node_id)
+      node_stats$total_loops[idx] <- node_stats$total_loops[idx] + 1
+      
+      if (analysis$type == "Reinforcing") {
+        node_stats$reinforcing_loops[idx] <- node_stats$reinforcing_loops[idx] + 1
+      } else {
+        node_stats$balancing_loops[idx] <- node_stats$balancing_loops[idx] + 1
+      }
+    }
+  }
+  
+  # Calculate leverage scores
+  node_stats$leverage_score <- with(node_stats, {
+    # Weight reinforcing loops slightly higher (1.2) than balancing loops (1.0)
+    (reinforcing_loops * 1.2 + balancing_loops) / (max(total_loops, 1))
+  })
+  
+  # Sort by leverage score
+  node_stats <- node_stats[order(-node_stats$leverage_score), ]
+  
+  return(node_stats)
 }

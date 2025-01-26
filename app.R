@@ -924,7 +924,10 @@ server <- function(input, output, session) {
         main = "Node Types"
       ) %>%
       visEdges(
-        smooth = FALSE,
+        smooth = list(
+          type = "curvedCW",
+          roundness = 0.2
+        ),
         arrows = "to",
         color = list(
           inherit = FALSE,
